@@ -1,34 +1,41 @@
 import requests
 import json
-import os
+from datetime import datetime
 
-def watch_repos():
-    repos = [
-        "SaadSaddique/Multi-Agent-Code-Review-system",
-        "smirk-dev/CodeReview-AI-Agent"
-    ]
-    findings = []
+def watch_intelligence():
+    # Fuentes de inteligencia: GitHub Advisories para Python/Node
+    intelligence = {
+        "sources": [
+            "https://api.github.com/repos/SaadSaddique/Multi-Agent-Code-Review-system",
+            "https://api.github.com/repos/advisories?per_page=5"
+        ],
+        "findings": []
+    }
     
-    for repo in repos:
-        try:
-            # Simulamos o consultamos la API de GitHub para ver actividad reciente
-            api_url = f"https://api.github.com/github-events" # En un caso real usaríamos el repo específico
-            # Para este MVP, buscaremos el README o tags de estos repos para "aprender"
-            info_url = f"https://api.github.com/repos/{repo}"
-            response = requests.get(info_url, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                findings.append({
-                    "repo": repo,
-                    "stars": data.get("stargazers_count"),
-                    "last_update": data.get("updated_at"),
-                    "description": data.get("description")
+    try:
+        # 1. Monitorear repo de referencia para nuevas reglas
+        repo_info = requests.get(intelligence["sources"][0], timeout=10).json()
+        intelligence["findings"].append({
+            "type": "reference_repo",
+            "name": "Sentience-Code",
+            "last_update": repo_info.get("updated_at"),
+            "new_stars": repo_info.get("stargazers_count")
+        })
+        
+        # 2. Monitorear Vulnerabilidades Globales Recientes
+        advisories = requests.get(intelligence["sources"][1], timeout=10).json()
+        if isinstance(advisories, list):
+            for adv in advisories:
+                intelligence["findings"].append({
+                    "type": "security_advisory",
+                    "severity": adv.get("severity"),
+                    "summary": adv.get("summary"),
+                    "ecosystem": adv.get("cvss", {}).get("score_metadata", {}).get("ecosystem", "unknown")
                 })
-        except Exception as e:
-            findings.append({"repo": repo, "error": str(e)})
+    except Exception as e:
+        intelligence["findings"].append({"error": str(e)})
             
-    return findings
+    return intelligence
 
 if __name__ == "__main__":
-    results = watch_repos()
-    print(json.dumps(results, indent=2))
+    print(json.dumps(watch_intelligence(), indent=2))
