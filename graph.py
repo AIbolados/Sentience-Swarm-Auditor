@@ -102,10 +102,13 @@ def discover_projects(state: SwarmState):
     return [Send("audit_project", task) for task in tasks]
 
 
-async def audit_project_node(task: ProjectTask, router: CredentialRouter) -> dict:
-    static_findings, static_ok = await asyncio.to_thread(run_static_checks, task["path"])
+async def run_project_audit(name: str, path: str, router: CredentialRouter) -> tuple[dict, bool]:
+    """Nucleo reusable: escaneo estatico + ensemble scan/debate para UN
+    proyecto. Devuelve (result, static_ok). Usado tanto por el grafo batch
+    (audit_project_node) como por el MCP server para auditar bajo demanda."""
+    static_findings, static_ok = await asyncio.to_thread(run_static_checks, path)
 
-    scan_messages = build_scan_messages(task["name"], static_findings)
+    scan_messages = build_scan_messages(name, static_findings)
 
     def debate_builder(_scan_provider: str, scan_output: str) -> list[dict]:
         return build_debate_messages(scan_output)
@@ -113,21 +116,33 @@ async def audit_project_node(task: ProjectTask, router: CredentialRouter) -> dic
     try:
         ensemble = await asyncio.to_thread(router.chat_ensemble, scan_messages, debate_builder)
     except NoProviderAvailableError as e:
-        logger.error("Sin proveedor LLM disponible para %s: %s", task["name"], e)
+        logger.error("Sin proveedor LLM disponible para %s: %s", name, e)
         ensemble = {"error": str(e)}
 
     result = {
-        "name": task["name"],
-        "path": task["path"],
+        "name": name,
+        "path": path,
         "static": static_findings,
         "ensemble": ensemble,
     }
     result["score"] = score_project(result)
+    return result, static_ok
 
+
+async def audit_project_node(task: ProjectTask, router: CredentialRouter) -> dict:
+    result, static_ok = await run_project_audit(task["name"], task["path"], router)
     if static_ok:
         await asyncio.to_thread(commit_hash, task["name"], task["static_hash"])
-
     return {"project_results": [result]}
+
+
+async def audit_single_project(path: str, router: CredentialRouter | None = None) -> dict:
+    """Audita un proyecto puntual bajo demanda (MCP), ignorando el
+    chequeo de 'sin cambios': siempre re-audita cuando se invoca."""
+    router = router or CredentialRouter()
+    name = Path(path).name
+    result, _static_ok = await run_project_audit(name, path, router)
+    return result
 
 
 async def watch_github_node(state: SwarmState) -> dict:

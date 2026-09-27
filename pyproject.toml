@@ -8,6 +8,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "langgraph>=1.2.12",
     "openai>=3.19.2",
+    "mcp[cli]>=2.2.0",
 ]
 
 [project.optional-dependencies]
