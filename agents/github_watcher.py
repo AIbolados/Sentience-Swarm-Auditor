@@ -1,41 +1,72 @@
-import requests
 import json
-from datetime import datetime
+import logging
+import os
 
-def watch_intelligence():
-    # Fuentes de inteligencia: GitHub Advisories para Python/Node
+import requests
+
+logger = logging.getLogger(__name__)
+
+GITHUB_API = "https://api.github.com"
+REFERENCE_REPO = "SaadSaddique/Multi-Agent-Code-Review-system"
+REQUEST_TIMEOUT = 10
+
+
+def _headers() -> dict:
+    headers = {"Accept": "application/vnd.github+json"}
+    token = os.environ.get("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def watch_intelligence() -> dict:
     intelligence = {
         "sources": [
-            "https://api.github.com/repos/SaadSaddique/Multi-Agent-Code-Review-system",
-            "https://api.github.com/repos/advisories?per_page=5"
+            f"{GITHUB_API}/repos/{REFERENCE_REPO}",
+            f"{GITHUB_API}/advisories?per_page=5",
         ],
-        "findings": []
+        "findings": [],
     }
-    
+    headers = _headers()
+
     try:
-        # 1. Monitorear repo de referencia para nuevas reglas
-        repo_info = requests.get(intelligence["sources"][0], timeout=10).json()
+        url = intelligence["sources"][0]
+        repo_info = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT).json()
         intelligence["findings"].append({
             "type": "reference_repo",
             "name": "Sentience-Code",
             "last_update": repo_info.get("updated_at"),
-            "new_stars": repo_info.get("stargazers_count")
+            "new_stars": repo_info.get("stargazers_count"),
         })
-        
-        # 2. Monitorear Vulnerabilidades Globales Recientes
-        advisories = requests.get(intelligence["sources"][1], timeout=10).json()
+    except (requests.RequestException, json.JSONDecodeError) as e:
+        logger.warning("No se pudo consultar el repo de referencia: %s", e)
+        intelligence["findings"].append({"error": f"reference_repo: {e}"})
+
+    try:
+        url = intelligence["sources"][1]
+        response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        advisories = response.json()
         if isinstance(advisories, list):
             for adv in advisories:
+                first_vuln = (adv.get("vulnerabilities") or [{}])[0]
+                ecosystem = first_vuln.get("package", {}).get("ecosystem", "unknown")
                 intelligence["findings"].append({
                     "type": "security_advisory",
                     "severity": adv.get("severity"),
                     "summary": adv.get("summary"),
-                    "ecosystem": adv.get("cvss", {}).get("score_metadata", {}).get("ecosystem", "unknown")
+                    "ecosystem": ecosystem,
                 })
-    except Exception as e:
-        intelligence["findings"].append({"error": str(e)})
-            
+    except (requests.RequestException, json.JSONDecodeError) as e:
+        logger.warning("No se pudieron consultar advisories: %s", e)
+        intelligence["findings"].append({"error": f"advisories: {e}"})
+
+    if not os.environ.get("GITHUB_TOKEN"):
+        logger.info("GITHUB_TOKEN no configurado: llamadas anonimas, limite 60 req/hora")
+
     return intelligence
 
+
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     print(json.dumps(watch_intelligence(), indent=2))

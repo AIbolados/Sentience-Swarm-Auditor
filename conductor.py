@@ -1,103 +1,133 @@
-import subprocess
 import json
+import logging
 import os
+import subprocess
+import sys
 from datetime import datetime
+from pathlib import Path
 
-# Rutas
-BASE_DIR = "/home/jibol2/swarm_auditor"
-VENV_PYTHON = os.path.join(BASE_DIR, "venv/bin/python3")
-LOG_DIR = "/home/jibol2/auditoria_diaria/logs"
+from dotenv import load_dotenv
 
-def run_agent(script_name):
-    script_path = os.path.join(BASE_DIR, "agents", script_name)
+load_dotenv()
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
+
+BASE_DIR = Path(__file__).resolve().parent
+SWARM_HOME = Path(os.environ.get("SWARM_HOME") or Path.home() / "swarm_auditor")
+LOG_DIR = Path(os.environ.get("LOG_DIR") or Path.home() / "auditoria_diaria" / "logs")
+
+
+def run_agent(script_name: str) -> dict | list | None:
+    script_path = BASE_DIR / "agents" / script_name
     try:
-        result = subprocess.run([VENV_PYTHON, script_path], capture_output=True, text=True, timeout=300)
-        output = result.stdout.strip()
-        if output:
-            json_start = output.find("[") if output.find("[") < output.find("{") and output.find("[") != -1 else output.find("{")
-            if json_start != -1:
-                return json.loads(output[json_start:])
-        return None
-    except Exception as e:
+        result = subprocess.run(
+            [sys.executable, str(script_path)],
+            capture_output=True, text=True, timeout=300,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        logger.error("No se pudo ejecutar %s: %s", script_name, e)
         return {"error": str(e)}
 
-def generate_report(github_data, audit_data):
+    if result.returncode != 0:
+        logger.error(
+            "%s termino con codigo %s: %s",
+            script_name, result.returncode, result.stderr.strip(),
+        )
+
+    output = result.stdout.strip()
+    if not output:
+        return None
+    try:
+        return json.loads(output)
+    except json.JSONDecodeError as e:
+        logger.error("Salida de %s no es JSON valido (%s). stdout: %.200s", script_name, e, output)
+        return {"error": f"invalid_json: {e}"}
+
+
+def generate_report(github_data, audit_data) -> Path:
     today = datetime.now().strftime("%Y-%m-%d")
-    report_path = os.path.join(LOG_DIR, f"{today}_report.md")
-    os.makedirs(LOG_DIR, exist_ok=True)
-    
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    report_path = LOG_DIR / f"{today}_report.md"
+
     score = 100
-    with open(report_path, 'w') as f:
-        f.write(f"# 🛡️ Reporte Maestro de Auditoría - {today}\n\n")
-        
-        # Inteligencia de Seguridad (GitHub Watcher)
-        f.write("## 🌍 Inteligencia Global (GitHub Watcher)\n")
+    with open(report_path, "w") as f:
+        f.write(f"# Reporte Maestro de Auditoria - {today}\n\n")
+
+        f.write("## Inteligencia Global (GitHub Watcher)\n")
         if github_data and "findings" in github_data:
             found_security = False
             for item in github_data["findings"]:
                 if item.get("type") == "security_advisory":
-                    f.write(f"- ⚠️ **{item.get('severity').upper()}**: {item.get('summary')} ({item.get('ecosystem')})\n")
+                    severity = (item.get("severity") or "?").upper()
+                    f.write(f"- **{severity}**: {item.get('summary')} ({item.get('ecosystem')})\n")
                     found_security = True
             if not found_security:
-                f.write("✅ No se detectaron nuevas amenazas globales relevantes hoy.\n")
+                f.write("No se detectaron nuevas amenazas globales relevantes hoy.\n")
+        else:
+            f.write("Sin datos de inteligencia global (ver logs para detalles).\n")
         f.write("\n")
-        
-        # Estado Local
-        f.write("## 🏗️ Estado de Proyectos Locales\n")
+
+        f.write("## Estado de Proyectos Locales\n")
         f.write("| Proyecto | Riesgos | Puntos |\n")
         f.write("| :--- | :--- | :--- |\n")
-        
+
         for project in audit_data:
             p_score = 10
             risks = []
             res = project.get("results", {})
-            if "bandit" in res and "Issue" in res["bandit"]: 
+            if "bandit" in res and "Issue" in res["bandit"]:
                 risks.append("Seguridad")
                 p_score -= 5
-            if "ruff" in res and res["ruff"]: 
+            if "ruff" in res and res["ruff"]:
                 risks.append("Sintaxis")
                 p_score -= 3
-            if "npm_audit" in res and isinstance(res["npm_audit"], dict) and res["npm_audit"].get("metadata", {}).get("vulnerabilities", {}).get("high", 0) > 0:
-                risks.append("NPM (High)")
-                p_score -= 4
-            
+            npm_audit = res.get("npm_audit")
+            if isinstance(npm_audit, dict):
+                high = npm_audit.get("metadata", {}).get("vulnerabilities", {}).get("high", 0)
+                if high > 0:
+                    risks.append("NPM (High)")
+                    p_score -= 4
+
             score -= (10 - p_score)
-            f.write(f"| {project['name']} | {', '.join(risks) if risks else '✅ OK'} | {max(0, p_score)}/10 |\n")
-        
+            risk_label = ", ".join(risks) if risks else "OK"
+            f.write(f"| {project['name']} | {risk_label} | {max(0, p_score)}/10 |\n")
+
         final_score = max(0, score)
-        color = "🟢" if final_score > 80 else "🟡" if final_score > 50 else "🔴"
-        f.write(f"\n\n### 📈 HEALTH SCORE GLOBAL: {color} {final_score}/100\n")
-        f.write(f"\n*Reporte generado por el Swarm Sentience-Ultra.*")
-        
+        f.write(f"\n\n### HEALTH SCORE GLOBAL: {final_score}/100\n")
+        f.write("\n*Reporte generado por Sentience Swarm Auditor.*")
+
     return report_path
 
-def main():
-    print("🚀 Iniciando Swarm Sentience-Ultra...")
-    
-    # 1. Auditoría Local (Silenciosa si no hay cambios)
+
+def main() -> None:
+    logger.info("Iniciando Swarm Sentience-Ultra...")
+
     local_findings = run_agent("audit_agent.py")
-    
+
     if not local_findings:
-        print("✅ No se detectaron cambios en los proyectos. Sistema en reposo.")
+        logger.info("No se detectaron cambios en los proyectos. Sistema en reposo.")
+        return
+    if isinstance(local_findings, dict) and "error" in local_findings:
+        error_msg = local_findings["error"]
+        logger.error("La auditoria local fallo, se aborta esta corrida: %s", error_msg)
         return
 
-    # 2. Vigilancia de Inteligencia
     github_findings = run_agent("github_watcher.py")
-    
-    # 3. Generar Reporte MD
-    report_file = generate_report(github_findings, local_findings)
-    
-    # 4. Presentación rápida en consola
-    print(f"\n⚠️ SE DETECTARON CAMBIOS EN {len(local_findings)} PROYECTOS")
-    print(f"📄 Reporte generado en: {report_file}\n")
-    
-    for project in local_findings:
-        print(f"📂 {project['name']} -> Ver reporte MD para detalles.")
 
-    # 5. Guardar JSON histórico
+    report_file = generate_report(github_findings, local_findings)
+
+    logger.info("Se detectaron cambios en %d proyectos", len(local_findings))
+    logger.info("Reporte generado en: %s", report_file)
+
+    for project in local_findings:
+        logger.info("%s -> ver reporte MD para detalles", project["name"])
+
     today_ts = datetime.now().strftime("%Y-%m-%d_%H%M")
-    with open(os.path.join(LOG_DIR, f"{today_ts}_audit.json"), 'w') as f:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(LOG_DIR / f"{today_ts}_audit.json", "w") as f:
         json.dump({"local": local_findings, "github": github_findings}, f, indent=2)
+
 
 if __name__ == "__main__":
     main()
