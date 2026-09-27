@@ -21,7 +21,10 @@ IGNORE_DIRS = {
 }
 
 
-def run_tool(tool_name: str, project_path: str) -> str:
+def run_tool(tool_name: str, project_path: str) -> str | None:
+    """None = la herramienta no pudo ejecutarse (no instalada, timeout).
+    '' = corrio y no encontro nada. Texto no vacio = hallazgo real.
+    Nunca confundir "no pude auditar" con "hallazgo de seguridad"."""
     tool_path = VENV_BIN / tool_name
     cmd = [str(tool_path) if tool_path.exists() else tool_name, project_path]
     try:
@@ -29,7 +32,7 @@ def run_tool(tool_name: str, project_path: str) -> str:
         return result.stdout.strip()
     except (OSError, subprocess.TimeoutExpired) as e:
         logger.warning("Fallo ejecutando %s sobre %s: %s", tool_name, project_path, e)
-        return f"Error: {e}"
+        return None
 
 
 def debug_suggest(tool_output: str) -> list[str] | None:
@@ -38,17 +41,17 @@ def debug_suggest(tool_output: str) -> list[str] | None:
     return tool_output.split("\n")[:3]
 
 
-def audit_project(name: str, path: str) -> dict | None:
-    changed, current_hash = has_changed(name, path)
-    if not changed:
-        return None
-
+def run_static_checks(path: str) -> tuple[dict, bool]:
+    """Corre ruff/bandit/npm audit sobre un proyecto. Devuelve (checks, ok):
+    ok indica si los chequeos configurados corrieron sin error de ejecucion
+    (no indica ausencia de hallazgos). El llamador decide si persiste el
+    hash de 'visto' en base a ok."""
     checks: dict = {}
     try:
         files = os.listdir(path)
     except OSError as e:
         logger.error("No se pudo listar %s: %s", path, e)
-        return {"error": str(e)}
+        return {"error": str(e)}, False
 
     is_python = any(f.endswith(".py") for f in files) or "requirements.txt" in files
     is_node = "package.json" in files
@@ -72,6 +75,17 @@ def audit_project(name: str, path: str) -> dict | None:
             checks["npm_audit"] = f"Error running npm audit: {e}"
             ok = False
 
+    return checks, ok
+
+
+def audit_project(name: str, path: str) -> dict | None:
+    """Uso standalone (CLI): compara hash, corre los checks estaticos y
+    persiste el hash solo si corrieron sin error."""
+    changed, current_hash = has_changed(name, path)
+    if not changed:
+        return None
+
+    checks, ok = run_static_checks(path)
     if ok:
         commit_hash(name, current_hash)
     return checks
