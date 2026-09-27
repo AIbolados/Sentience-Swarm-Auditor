@@ -24,7 +24,9 @@ logger = logging.getLogger(__name__)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "agents"))
 
+from github_source import InvalidRepoSpecError  # noqa: E402
 from graph import audit_single_project, build_graph  # noqa: E402
+from graph import audit_github_repo as _audit_github_repo_core  # noqa: E402
 from llm_router import CredentialRouter  # noqa: E402
 
 _router = CredentialRouter()
@@ -43,6 +45,24 @@ async def audit_project(path: str) -> dict:
     if not resolved.is_dir():
         return {"error": f"No existe el directorio: {resolved}"}
     return await audit_single_project(str(resolved), _router)
+
+
+async def audit_github_repo(owner_repo: str, ref: str = "HEAD") -> dict:
+    """Clona (shallow, solo lectura) un repo de GitHub y lo audita con el
+    mismo pipeline (escaneo estatico + ensemble scan/debate). Nunca
+    ejecuta codigo del repo, solo lo analiza; el clon se borra siempre al
+    terminar.
+
+    owner_repo: formato 'owner/repo' (ej. 'AIbolados/audit-mcp').
+    ref: branch o tag especifico, o 'HEAD' para la rama por defecto.
+
+    El acceso real lo determina GITHUB_TOKEN: sin token, solo repos
+    publicos; con un token que tenga permiso sobre el repo (propio, de tu
+    organizacion, o de un tercero que te dio acceso), tambien privados."""
+    try:
+        return await _audit_github_repo_core(owner_repo, ref, _router)
+    except InvalidRepoSpecError as e:
+        return {"error": str(e)}
 
 
 async def audit_all_projects() -> dict:
@@ -68,6 +88,7 @@ def get_last_report() -> str:
 
 mcp = MCPServer("audit-mcp")
 mcp.add_tool(audit_project)
+mcp.add_tool(audit_github_repo)
 mcp.add_tool(audit_all_projects)
 mcp.add_tool(get_last_report)
 

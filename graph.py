@@ -12,6 +12,7 @@ import json
 import logging
 import operator
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Annotated, TypedDict
@@ -23,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "agents"))
 
 from audit_agent import IGNORE_DIRS, PROJECTS_HOME, run_static_checks  # noqa: E402
 from change_detector import commit_hash, has_changed  # noqa: E402
+from github_source import CloneError, clone_repo_shallow  # noqa: E402
 from github_watcher import watch_intelligence  # noqa: E402
 from llm_router import CredentialRouter, NoProviderAvailableError  # noqa: E402
 from scoring import score_project  # noqa: E402
@@ -142,6 +144,36 @@ async def audit_single_project(path: str, router: CredentialRouter | None = None
     router = router or CredentialRouter()
     name = Path(path).name
     result, _static_ok = await run_project_audit(name, path, router)
+    return result
+
+
+async def audit_github_repo(
+    owner_repo: str, ref: str = "HEAD", router: CredentialRouter | None = None
+) -> dict:
+    """Clona (shallow, solo lectura) un repo de GitHub y lo audita con el
+    mismo pipeline que un proyecto local. GITHUB_TOKEN determina el
+    acceso: sin token solo repos publicos, con un token que tenga
+    permiso tambien repos privados. El clon se borra siempre al terminar,
+    exista o no error, para no dejar codigo de terceros persistiendo en
+    disco."""
+    router = router or CredentialRouter()
+    try:
+        local_path = await asyncio.to_thread(clone_repo_shallow, owner_repo, ref)
+    except CloneError as e:
+        logger.error("No se pudo clonar %s@%s: %s", owner_repo, ref, e)
+        return {
+            "name": owner_repo,
+            "source": {"type": "github", "owner_repo": owner_repo, "ref": ref},
+            "error": str(e),
+        }
+
+    try:
+        safe_name = owner_repo.replace("/", "__")
+        result, _static_ok = await run_project_audit(safe_name, local_path, router)
+    finally:
+        await asyncio.to_thread(shutil.rmtree, local_path, ignore_errors=True)
+
+    result["source"] = {"type": "github", "owner_repo": owner_repo, "ref": ref}
     return result
 
 

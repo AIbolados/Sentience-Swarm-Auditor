@@ -27,7 +27,13 @@ demanda como servidor MCP conectado a Claude Code.
 - **Zero-Noise:** si un proyecto no cambió desde la última corrida
   exitosa, no se re-audita.
 - **MCP server local (stdio):** invocable bajo demanda desde Claude Code
-  (`audit_project`, `audit_all_projects`, `get_last_report`).
+  (`audit_project`, `audit_github_repo`, `audit_all_projects`,
+  `get_last_report`).
+- **Auditoría de repos remotos de GitHub:** `audit_github_repo(owner/repo)`
+  clona (shallow, solo lectura, nunca ejecuta código del repo) y audita
+  con el mismo pipeline. `GITHUB_TOKEN` determina el acceso: sin token
+  solo públicos, con un token con permiso también privados (propios o de
+  tu organización/equipo).
 
 ## 📦 Instalación
 1. Copia el repo a la máquina.
