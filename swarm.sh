@@ -1,5 +1,5 @@
 #!/bin/bash
-# Sentience Swarm Launcher
+# audit-mcp Launcher (modo batch/cron)
 # Uso: bash swarm.sh
 set -euo pipefail
 cd "$(dirname "$0")"

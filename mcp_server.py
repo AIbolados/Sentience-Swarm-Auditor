@@ -1,4 +1,4 @@
-"""Servidor MCP local (stdio) para Sentience Swarm Auditor.
+"""Servidor MCP local (stdio) para audit-mcp.
 
 Expone el mismo grafo LangGraph (escaneo estatico + ensemble scan/debate
 multi-modelo) como tools invocables bajo demanda desde Claude Code, sin
@@ -66,7 +66,7 @@ def get_last_report() -> str:
     return reports[-1].read_text()
 
 
-mcp = MCPServer("sentience-swarm-auditor")
+mcp = MCPServer("audit-mcp")
 mcp.add_tool(audit_project)
 mcp.add_tool(audit_all_projects)
 mcp.add_tool(get_last_report)

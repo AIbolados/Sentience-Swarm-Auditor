@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 async def run() -> None:
     from graph import build_graph
 
-    logger.info("Iniciando Swarm Sentience-Ultra (LangGraph + ensemble multi-modelo)...")
+    logger.info("Iniciando audit-mcp (LangGraph + ensemble multi-modelo)...")
     graph = build_graph()
     initial_state = {"project_results": [], "github_intel": None, "report_path": None}
     final_state = await graph.ainvoke(initial_state)

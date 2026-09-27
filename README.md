@@ -1,4 +1,10 @@
-# 🛡️ Sentience Swarm Auditor
+# 🛡️ audit-mcp
+
+> **Nota de transición:** este repo (ex-Sentience-Swarm-Auditor, Python +
+> LangGraph) y el `audit-mcp` original en TypeScript son, por ahora, dos
+> proyectos con el mismo nombre y proposito. Se fusionaran cuando se
+> retome el trabajo localmente. Este es el motor mas avanzado (swarm real
+> + ensemble multi-modelo), pensado como base de esa fusion.
 
 Sistema de auditoría multi-agente. Orquesta con LangGraph un ensemble
 multi-modelo (scan + debate, dos proveedores LLM independientes) para
@@ -14,8 +20,9 @@ demanda como servidor MCP conectado a Claude Code.
   revisa a sí mismo). Rotación de credenciales entre 7 proveedores
   OpenAI-compatible (NaraRouter, TokenRouter, OpenRouter, Mistral,
   Gemini, Groq, HuggingFace), con cooldown automático en rate limit.
-- **Scoring compartido con audit-mcp:** Engineering Health, Vibe Slop
-  Risk, Evidence Confidence, Production Readiness.
+- **Scoring compartido con el audit-mcp en TypeScript:** Engineering
+  Health, Vibe Slop Risk, Evidence Confidence, Production Readiness
+  (mismo rubric en ambos, para cuando se fusionen).
 - **Watcher:** vigila GitHub Advisories para amenazas globales.
 - **Zero-Noise:** si un proyecto no cambió desde la última corrida
   exitosa, no se re-audita.

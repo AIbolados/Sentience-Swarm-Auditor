@@ -197,7 +197,7 @@ def generate_report_node(state: SwarmState, log_dir: Path) -> dict:
                 f.write(f"- Scan ({scan_provider}): {scan_output}\n")
                 f.write(f"- Debate ({debate_provider}): {debate_output}\n")
 
-        f.write("\n\n*Reporte generado por Sentience Swarm Auditor")
+        f.write("\n\n*Reporte generado por audit-mcp")
         f.write(" (LangGraph + ensemble multi-modelo).*")
 
     logger.info("Reporte generado en %s", report_path)
