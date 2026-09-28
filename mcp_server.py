@@ -24,8 +24,9 @@ logger = logging.getLogger(__name__)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "agents"))
 
+from active_scan_guard import TargetNotAuthorizedError  # noqa: E402
 from github_source import InvalidRepoSpecError  # noqa: E402
-from graph import audit_single_project, build_graph  # noqa: E402
+from graph import audit_single_project, build_graph, run_active_scan  # noqa: E402
 from graph import audit_github_repo as _audit_github_repo_core  # noqa: E402
 from llm_router import CredentialRouter  # noqa: E402
 
@@ -65,6 +66,45 @@ async def audit_github_repo(owner_repo: str, ref: str = "HEAD") -> dict:
         return {"error": str(e)}
 
 
+async def active_security_scan(
+    target: str,
+    environment: str,
+    confirm_own_target: bool = False,
+    confirm_production_risk: bool = False,
+    severity: list[str] | None = None,
+) -> dict:
+    """Motor DAST ACTIVO (Fase 4): ejecuta trafico real (Nuclei, +14.000
+    templates curados por la comunidad, nunca payloads improvisados por
+    el LLM) contra un target vivo, y pasa los hallazgos por el mismo
+    ensemble scan/debate. A diferencia de audit_project/audit_github_repo,
+    esto SI puede afectar al sistema objetivo (carga, alertas).
+
+    SOLO usar contra proyectos propios del equipo, nunca contra sistemas
+    de terceros sin su autorizacion explicita y por escrito.
+
+    target: URL http(s) del sistema a escanear (ej. http://localhost:3000
+        o https://staging.tuapp.com).
+    environment: 'local_staging' o 'production'. Determina los limites de
+        agresividad (produccion es mucho mas conservador: menos requests
+        por segundo, para no degradar el servicio).
+    confirm_own_target: DEBE ser True explicitamente. Sin esto, se
+        rechaza sin ejecutar nada.
+    confirm_production_risk: requerido ADEMAS cuando environment es
+        'production' - confirma que corres esto en una ventana aceptada
+        por tu equipo, no contra trafico de usuarios reales sin aviso.
+    severity: lista de severidades a incluir (ej. ['critical']). Por
+        defecto ['medium','high','critical'] - pasa [] para no filtrar
+        (mucho mas lento, corre los +14.000 templates).
+    """
+    try:
+        return await run_active_scan(
+            target, environment, confirm_own_target, confirm_production_risk,
+            _router, severity=severity,
+        )
+    except (TargetNotAuthorizedError, ValueError) as e:
+        return {"error": str(e)}
+
+
 async def audit_all_projects() -> dict:
     """Corre el batch completo: escanea PROJECTS_HOME, audita todos los
     proyectos con cambios desde la ultima corrida (fan-out concurrente),
@@ -89,6 +129,7 @@ def get_last_report() -> str:
 mcp = MCPServer("audit-mcp")
 mcp.add_tool(audit_project)
 mcp.add_tool(audit_github_repo)
+mcp.add_tool(active_security_scan)
 mcp.add_tool(audit_all_projects)
 mcp.add_tool(get_last_report)
 

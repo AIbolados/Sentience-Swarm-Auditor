@@ -22,12 +22,16 @@ from langgraph.types import Send
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "agents"))
 
+from active_scan_guard import ScanAuthorization, TargetEnvironment  # noqa: E402
 from audit_agent import IGNORE_DIRS, PROJECTS_HOME, run_static_checks  # noqa: E402
 from change_detector import commit_hash, has_changed  # noqa: E402
+from dast_nuclei import NucleiNotAvailableError, NucleiScanError, run_nuclei_scan  # noqa: E402
 from github_source import CloneError, clone_repo_shallow  # noqa: E402
 from github_watcher import watch_intelligence  # noqa: E402
 from llm_router import CredentialRouter, NoProviderAvailableError  # noqa: E402
-from scoring import score_project  # noqa: E402
+from scoring import score_active_scan, score_project  # noqa: E402
+
+NUCLEI_TEMPLATES_DIR = os.environ.get("NUCLEI_TEMPLATES_DIR")
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +179,124 @@ async def audit_github_repo(
 
     result["source"] = {"type": "github", "owner_repo": owner_repo, "ref": ref}
     return result
+
+
+def build_dast_scan_messages(target: str, findings: list[dict]) -> list[dict]:
+    findings_summary = json.dumps(findings, indent=2, default=str)[:4000]
+    return [
+        {
+            "role": "system",
+            "content": (
+                "Eres un agente de auditoria de seguridad que interpreta resultados "
+                "de un escaneo DAST (Nuclei) contra una aplicacion PROPIA del "
+                "equipo, ejecutado con autorizacion. Los hallazgos ya fueron "
+                "confirmados por una herramienta automatizada (no los inventes ni "
+                "los descartes sin evidencia). Responde en espanol, breve:\n"
+                "1) Prioriza los hallazgos por severidad real de negocio.\n"
+                "2) Senala cuales requieren accion inmediata.\n"
+                "3) Senala si algun hallazgo parece un falso positivo dado el "
+                "contexto (ej. un banner de version en un entorno de prueba)."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"Target: {target}\nHallazgos DAST (JSON):\n{findings_summary}",
+        },
+    ]
+
+
+def build_dast_debate_messages(scan_output: str) -> list[dict]:
+    return [
+        {
+            "role": "system",
+            "content": (
+                "Eres un segundo auditor de seguridad, independiente del primero. "
+                "Valida o refuta el analisis anterior de un escaneo DAST. Se "
+                "especificamente esceptico: di 'confirmo' o 'riesgo real' para "
+                "hallazgos que consideres genuinos, y 'falso positivo' para los "
+                "que no. Responde en espanol, breve."
+            ),
+        },
+        {"role": "user", "content": f"Analisis a validar:\n{scan_output}"},
+    ]
+
+
+DEFAULT_DAST_SEVERITY = ["medium", "high", "critical"]
+
+
+async def run_active_scan(
+    target: str,
+    environment: str,
+    confirm_own_target: bool,
+    confirm_production_risk: bool = False,
+    router: CredentialRouter | None = None,
+    severity: list[str] | None = None,
+    tags: list[str] | None = None,
+) -> dict:
+    """Motor DAST activo (Fase 4): ejecuta Nuclei contra un target
+    autorizado y pasa los hallazgos por el mismo patron scan/debate que
+    el resto del sistema. Lanza TargetNotAuthorizedError si falta
+    confirmacion - esto NUNCA se salta ni tiene un modo "forzar".
+
+    Por defecto filtra a severity medium/high/critical: correr los
+    +14.000 templates sin filtrar es lento y genera carga innecesaria
+    contra el target sin aportar señal (la mayoria son "info", como
+    deteccion de tecnologia). Pasa severity=[] explicitamente para no
+    filtrar."""
+    router = router or CredentialRouter()
+
+    auth = ScanAuthorization(
+        target=target,
+        environment=TargetEnvironment(environment),
+        confirm_own_target=confirm_own_target,
+        confirm_production_risk=confirm_production_risk,
+    )
+    auth.validate()
+    limits = auth.limits
+    effective_severity = DEFAULT_DAST_SEVERITY if severity is None else severity
+
+    try:
+        findings = await asyncio.to_thread(
+            run_nuclei_scan,
+            target,
+            limits.rate_limit,
+            limits.concurrency,
+            limits.max_duration_seconds,
+            NUCLEI_TEMPLATES_DIR,
+            tags,
+            effective_severity or None,
+        )
+    except (NucleiNotAvailableError, NucleiScanError) as e:
+        logger.error("Escaneo activo fallo para %s: %s", target, e)
+        return {"target": target, "environment": environment, "error": str(e)}
+
+    if not findings:
+        return {
+            "target": target,
+            "environment": environment,
+            "findings": [],
+            "ensemble": None,
+            "score": score_active_scan([], None),
+        }
+
+    scan_messages = build_dast_scan_messages(target, findings)
+
+    def debate_builder(_scan_provider: str, scan_output: str) -> list[dict]:
+        return build_dast_debate_messages(scan_output)
+
+    try:
+        ensemble = await asyncio.to_thread(router.chat_ensemble, scan_messages, debate_builder)
+    except NoProviderAvailableError as e:
+        logger.error("Sin proveedor LLM disponible para escaneo activo de %s: %s", target, e)
+        ensemble = {"error": str(e)}
+
+    return {
+        "target": target,
+        "environment": environment,
+        "findings": findings,
+        "ensemble": ensemble,
+        "score": score_active_scan(findings, ensemble),
+    }
 
 
 async def watch_github_node(state: SwarmState) -> dict:

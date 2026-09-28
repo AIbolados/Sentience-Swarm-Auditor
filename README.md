@@ -34,6 +34,15 @@ demanda como servidor MCP conectado a Claude Code.
   con el mismo pipeline. `GITHUB_TOKEN` determina el acceso: sin token
   solo públicos, con un token con permiso también privados (propios o de
   tu organización/equipo).
+- **Motor DAST activo (Fase 4):** `active_security_scan(target, environment,
+  confirm_own_target, confirm_production_risk)` ejecuta
+  [Nuclei](https://github.com/projectdiscovery/nuclei) (+14.000 templates
+  curados, nunca payloads improvisados por el LLM) contra un target vivo,
+  con el mismo patrón scan/debate. **Requiere confirmación explícita**:
+  sin `confirm_own_target=True` se rechaza sin ejecutar nada; contra
+  `production` exige además `confirm_production_risk=True` y aplica
+  límites de agresividad mucho más conservadores (menos requests/segundo)
+  para no degradar el servicio.
 
 ## 📦 Instalación
 1. Copia el repo a la máquina.
@@ -48,8 +57,10 @@ demanda como servidor MCP conectado a Claude Code.
 
 ## 📂 Estructura
 - `/agents`: lógica de los agentes (`audit_agent.py`, `github_watcher.py`,
-  `change_detector.py`, `llm_router.py`, `scoring.py`).
-- `graph.py`: grafo LangGraph (discovery, audit_project, scoring, reporte).
+  `change_detector.py`, `llm_router.py`, `scoring.py`, `github_source.py`,
+  `active_scan_guard.py`, `dast_nuclei.py`).
+- `graph.py`: grafo LangGraph (discovery, audit_project, audit_github_repo,
+  run_active_scan, scoring, reporte).
 - `mcp_server.py`: servidor MCP que expone el grafo como tools.
 - `conductor.py`: entrypoint del modo batch/cron.
 - `/tests`: tests con `pytest`.
@@ -61,8 +72,15 @@ demanda como servidor MCP conectado a Claude Code.
 - [`uv`](https://docs.astral.sh/uv/) como gestor de paquetes
 - Node.js (opcional, para proyectos JS con `npm audit`)
 - Token de GitHub (opcional, recomendado) en `.env` para evitar el rate
-  limit de 60 req/hora en llamadas anónimas al watcher
+  limit de 60 req/hora en llamadas anónimas al watcher, y necesario para
+  auditar repos privados con `audit_github_repo`
 - Al menos 2 API keys del pool de proveedores LLM (ver `.env.example`)
+- Para el motor DAST activo (opcional, solo si usás `active_security_scan`):
+  [`nuclei`](https://github.com/projectdiscovery/nuclei)
+  (`go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest`)
+  y sus templates (`git clone --depth=1
+  https://github.com/projectdiscovery/nuclei-templates.git`, ruta
+  configurable con `NUCLEI_TEMPLATES_DIR`)
 
 ## 🧪 Desarrollo
 ```bash
@@ -71,9 +89,10 @@ uv run pytest
 uv run ruff check .
 ```
 
-## 🗺️ Roadmap
-Pendiente (Fase 4, diseño aparte por su sensibilidad): motor de
-pentesting activo (DAST) para evaluar vulnerabilidades por inyección
-contra proyectos propios del equipo — con guardrail explícito de
-confirmación de target propio, nunca contra sistemas de terceros sin
-autorización.
+## ⚠️ Motor DAST activo: uso responsable
+`active_security_scan` ejecuta tráfico real contra un target. Está
+pensado exclusivamente para **evaluar la seguridad de proyectos propios
+del equipo**, nunca contra sistemas de terceros sin su autorización
+explícita y por escrito — eso sería acceso no autorizado, no auditoría.
+El guardrail (`agents/active_scan_guard.py`) no tiene forma de saltarse:
+sin `confirm_own_target=True` se rechaza antes de tocar la red.

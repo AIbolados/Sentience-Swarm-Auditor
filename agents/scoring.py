@@ -31,6 +31,46 @@ def _debate_refutes_scan(debate_output: str | None) -> bool:
     return any(kw in lowered for kw in refute_keywords)
 
 
+def score_active_scan(findings: list[dict], ensemble: dict | None) -> Score:
+    """Rubric para resultados del motor DAST activo (Fase 4). Distinto de
+    score_project porque la entrada es una lista de hallazgos con
+    severidad explicita del template (nuclei), no output de linters."""
+    ensemble = ensemble or {}
+    critical_or_high = [
+        f for f in findings if (f.get("severity") or "").lower() in ("critical", "high")
+    ]
+    ensemble_failed = bool(ensemble.get("error"))
+    debate_output = ensemble.get("debate_output")
+    confirmed = _debate_confirms_risk(debate_output)
+    refuted = _debate_refutes_scan(debate_output)
+
+    engineering_health = max(0, 100 - min(100, len(findings) * 5))
+
+    vibe_slop_risk = 0
+    if critical_or_high and confirmed:
+        vibe_slop_risk = 60
+    elif critical_or_high and not refuted and not ensemble_failed:
+        vibe_slop_risk = 40
+
+    evidence_confidence = 30 if ensemble_failed else 100
+
+    if critical_or_high and confirmed:
+        production_readiness = "BLOCKED"
+    elif ensemble_failed:
+        production_readiness = "NOT_ASSESSED"
+    elif findings:
+        production_readiness = "CONDITIONAL"
+    else:
+        production_readiness = "READY"
+
+    return Score(
+        engineering_health=engineering_health,
+        vibe_slop_risk=vibe_slop_risk,
+        evidence_confidence=evidence_confidence,
+        production_readiness=production_readiness,
+    )
+
+
 def score_project(result: dict) -> Score:
     static = result.get("static", {}) or {}
     ensemble = result.get("ensemble", {}) or {}
