@@ -1,43 +1,63 @@
 import hashlib
-import os
 import json
+import logging
+import os
+from pathlib import Path
 
-STATE_FILE = "/home/jibol2/swarm_auditor/state.json"
+logger = logging.getLogger(__name__)
 
-def get_dir_hash(directory):
+SWARM_HOME = Path(os.environ.get("SWARM_HOME") or Path.home() / "swarm_auditor")
+STATE_FILE = SWARM_HOME / "state.json"
+
+IGNORED_SUBDIRS = {".git", "node_modules", "__pycache__", "venv", ".venv"}
+
+
+def get_dir_hash(directory: str) -> str:
     hash_func = hashlib.md5()
     for root, dirs, files in os.walk(directory):
-        # Ignorar carpetas pesadas/inútiles para el hash
-        dirs[:] = [d for d in dirs if d not in {'.git', 'node_modules', '__pycache__', 'venv'}]
-        for names in sorted(files):
-            filepath = os.path.join(root, names)
+        dirs[:] = [d for d in dirs if d not in IGNORED_SUBDIRS]
+        for name in sorted(files):
+            filepath = os.path.join(root, name)
             try:
-                with open(filepath, 'rb') as f:
+                with open(filepath, "rb") as f:
                     while chunk := f.read(8192):
                         hash_func.update(chunk)
-            except:
-                pass
+            except OSError as e:
+                logger.debug("No se pudo leer %s: %s", filepath, e)
     return hash_func.hexdigest()
 
-def has_changed(project_name, project_path):
+
+def _load_state() -> dict:
+    if not STATE_FILE.exists():
+        return {}
+    try:
+        return json.loads(STATE_FILE.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning("state.json corrupto o ilegible (%s), se reinicia", e)
+        return {}
+
+
+def has_changed(project_name: str, project_path: str) -> tuple[bool, str]:
+    """Compara el hash actual contra el guardado. NO persiste el nuevo hash:
+    eso es responsabilidad de commit_hash(), llamado solo tras auditar con exito.
+    """
     current_hash = get_dir_hash(project_path)
-    
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, 'r') as f:
-            state = json.load(f)
-    else:
-        state = {}
-        
+    state = _load_state()
     old_hash = state.get(project_name)
-    
-    if current_hash != old_hash:
-        state[project_name] = current_hash
-        with open(STATE_FILE, 'w') as f:
-            json.dump(state, f, indent=2)
-        return True
-    
-    return False
+    return current_hash != old_hash, current_hash
+
+
+def commit_hash(project_name: str, current_hash: str) -> None:
+    """Persiste el hash como 'visto'. Llamar solo despues de que la
+    auditoria del proyecto termino sin errores, para que un fallo a mitad
+    de camino se reintente en la siguiente corrida.
+    """
+    state = _load_state()
+    state[project_name] = current_hash
+    SWARM_HOME.mkdir(parents=True, exist_ok=True)
+    STATE_FILE.write_text(json.dumps(state, indent=2))
+
 
 if __name__ == "__main__":
-    # Test simple
-    print(has_changed("test", "/home/jibol2/swarm_auditor"))
+    changed, h = has_changed("test", str(SWARM_HOME))
+    print(changed, h)

@@ -1,16 +1,17 @@
 #!/bin/bash
-# Sentience Swarm Launcher
+# audit-mcp Launcher (modo batch/cron)
 # Uso: bash swarm.sh
+set -euo pipefail
+cd "$(dirname "$0")"
 
-BASE_DIR="/home/jibol2/swarm_auditor"
-PYTHON_EXE="$BASE_DIR/venv/bin/python3"
-
-# Asegurar que el entorno existe
-if [ ! -f "$PYTHON_EXE" ]; then
-    echo "🔧 Inicializando entorno del Swarm..."
-    python3 -m venv "$BASE_DIR/venv"
-    "$BASE_DIR/venv/bin/pip" install -q ruff bandit radon requests
+if ! command -v uv &> /dev/null; then
+    echo "uv no esta instalado. Instalalo: https://docs.astral.sh/uv/"
+    exit 1
 fi
 
-# Ejecutar el conductor
-"$PYTHON_EXE" "$BASE_DIR/conductor.py"
+if [ ! -f ".env" ] && [ -f ".env.example" ]; then
+    echo "No existe .env. Copia .env.example a .env y completa los valores."
+fi
+
+uv sync --quiet
+uv run python conductor.py
