@@ -118,3 +118,10 @@ def test_not_sent_to_panel_is_unreviewed_unless_high_precision():
     assert consolidate_finding(low, [], None)["status"] == "unreviewed"
     critical = _finding(tier="deterministic", severity="critical")
     assert consolidate_finding(critical, [], None)["status"] == "confirmed"
+
+
+def test_false_positive_votes_from_unverified_families_never_dismiss():
+    votes = [
+        {**_vote("false_positive", provider=f"p{i}"), "verified": False} for i in range(3)
+    ]
+    assert consolidate_finding(_finding(), votes, 3)["status"] == "disputed"

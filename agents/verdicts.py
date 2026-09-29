@@ -28,6 +28,7 @@ class Vote(TypedDict):
     confidence: float
     reason: str
     grounded: bool
+    verified: bool  # la familia del revisor esta verificada (modelo y familia fijados)
 
 
 class Consolidated(TypedDict):
@@ -88,7 +89,11 @@ def is_grounded(quote: str, shown_evidence: str) -> bool:
 
 
 def build_votes(
-    provider: str, family: str, parsed: dict[str, dict], shown_evidence: dict[str, str]
+    provider: str,
+    family: str,
+    parsed: dict[str, dict],
+    shown_evidence: dict[str, str],
+    verified: bool = True,
 ) -> dict[str, Vote]:
     """Un Vote por hallazgo mostrado. `shown_evidence` es el texto EXACTO
     (ya escapado) que vio el modelo: contra eso se verifica la cita."""
@@ -98,7 +103,7 @@ def build_votes(
         if item is None:
             votes[finding_id] = Vote(
                 provider=provider, family=family, verdict="uncertain", confidence=0.0,
-                reason="sin veredicto para este hallazgo", grounded=False,
+                reason="sin veredicto para este hallazgo", grounded=False, verified=verified,
             )
             continue
         grounded = is_grounded(item["evidence_quote"], evidence)
@@ -110,6 +115,7 @@ def build_votes(
         votes[finding_id] = Vote(
             provider=provider, family=family, verdict=verdict,
             confidence=item["confidence"], reason=reason[:MAX_REASON_CHARS], grounded=grounded,
+            verified=verified,
         )
     return votes
 
@@ -138,7 +144,13 @@ def consolidate_finding(
     elif n_real >= 2:
         status = "confirmed"
     elif n_fp >= 2 and n_real == 0:
-        status = "dismissed"
+        # Descartar exige >= 2 familias VERIFICADAS distintas: votos de agregadores
+        # "auto" pueden venir del mismo modelo y no cuentan como independientes.
+        fp_families = {
+            v["family"] for v in votes
+            if v["verdict"] == "false_positive" and v.get("verified", True)
+        }
+        status = "dismissed" if len(fp_families) >= 2 else "disputed"
     else:
         status = "disputed"
     return Consolidated(status=status, votes=votes)

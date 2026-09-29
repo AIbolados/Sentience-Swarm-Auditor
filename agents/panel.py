@@ -133,7 +133,9 @@ def run_panel(
             })
             if provider.family_verified:
                 verified_families.add(family)
-            for finding_id, vote in build_votes(provider.name, family, parsed, shown).items():
+            for finding_id, vote in build_votes(
+                provider.name, family, parsed, shown, provider.family_verified
+            ).items():
                 votes_by_id[finding_id].append(vote)
         for finding in batch:
             responding[finding["id"]] = len(members)
