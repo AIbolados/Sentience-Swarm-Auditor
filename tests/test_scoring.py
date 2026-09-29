@@ -103,3 +103,16 @@ def test_unaudited_automation_is_a_limitation():
     score = score_project(_result(coverage=coverage))
     assert score["production_readiness"] == "CONDITIONAL"
     assert any("n8n:flow.json" in r for r in score["reasons"])
+
+
+def test_only_secret_scan_is_never_ready():
+    score = score_project(_result(tools={"secrets": "ok"}))
+    assert score["production_readiness"] == "CONDITIONAL"
+    assert any("Ningun analizador" in r for r in score["reasons"])
+
+
+def test_scan_limits_are_reported_and_block_ready():
+    coverage = {**FULL_COVERAGE, "limits": ["Escaneo de secretos omitio 1 archivo(s)"]}
+    score = score_project(_result(coverage=coverage))
+    assert score["production_readiness"] == "CONDITIONAL"
+    assert any("omitio" in r for r in score["reasons"])

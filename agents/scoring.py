@@ -98,6 +98,9 @@ def _coverage_gaps(coverage: dict, tools: dict) -> list[str]:
             "Automatizaciones sin motor de procesos (contenido no auditado): "
             + ", ".join(coverage["unaudited_automation"][:5])
         )
+    gaps.extend(coverage.get("limits") or [])
+    if set(tools) <= {"secrets"}:
+        gaps.append("Ningun analizador de codigo aplico (solo escaneo de secretos)")
     failed = sorted(name for name, status in tools.items() if status != "ok")
     if failed:
         gaps.append(
@@ -162,8 +165,10 @@ def score_project(result: dict) -> Score:
         confidence -= 15
     if coverage.get("unaudited_automation"):
         confidence -= 10
-    if coverage.get("truncated"):
+    if coverage.get("truncated") or coverage.get("limits"):
         confidence -= 10
+    if set(tools) <= {"secrets"}:
+        confidence -= 15
     if has_disputed:
         confidence -= 10
     evidence_confidence = max(10, confidence)

@@ -144,3 +144,17 @@ def test_summarize_drops_the_file_list(tmp_path):
     summary = summarize_discovery(classify_target(str(tmp_path)))
     assert "files" not in summary
     assert summary["files_total"] == 1
+
+
+def test_build_vendor_and_dist_directories_are_not_ignored(tmp_path):
+    for name in ("build", "vendor", "dist"):
+        _write(tmp_path, f"{name}/config.js", "x\n")
+    assert set(classify_target(str(tmp_path))["files"]) == {
+        "build/config.js", "vendor/config.js", "dist/config.js",
+    }
+
+
+def test_vue_and_svelte_count_as_partially_analyzed_javascript(tmp_path):
+    _write(tmp_path, "App.vue", "<template></template>\n")
+    result = classify_target(str(tmp_path))
+    assert result["languages"] == {"javascript": 1}

@@ -148,3 +148,38 @@ def test_node_project_runs_npm_audit_per_manifest(tmp_path, monkeypatch):
     assert calls == [("npm", str(tmp_path))]
     assert result["tools"] == {"secrets": "ok", "npm_audit": "ok"}
     assert {f["rule"] for f in result["findings"]} == {"npm:lodash", "npm:minimist"}
+
+
+def test_hardcoded_password_value_never_leaks_from_bandit(tmp_path):
+    (tmp_path / "app.py").write_text('password = "hunter2"\n')
+    result = _static(tmp_path)
+    assert any(f["rule"] == "B105" for f in result["findings"])
+    assert "hunter2" not in json.dumps(result)
+
+
+def test_bandit_and_secret_scan_do_not_double_count_the_same_line(tmp_path):
+    (tmp_path / "app.py").write_text('password = "xK9fT2qLm8ZpR4vBn"\n')
+    result = _static(tmp_path)
+    assert [f["source"] for f in result["findings"]] == ["secrets"]
+
+
+def test_private_key_finding_has_no_neighbor_lines(tmp_path):
+    body = "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW"
+    (tmp_path / "deploy.key").write_text(
+        f"-----BEGIN OPENSSH PRIVATE KEY-----\n{body}\n-----END OPENSSH PRIVATE KEY-----\n"
+    )
+    result = _static(tmp_path)
+    assert [f["rule"] for f in result["findings"]] == ["private-key"]
+    assert body not in json.dumps(result)
+
+
+def test_npm_manifest_cap_is_reported_as_a_limit(tmp_path, monkeypatch):
+    monkeypatch.setattr(audit_agent, "MAX_NPM_MANIFESTS", 1)
+    for name in ("a", "b"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "package.json").write_text("{}")
+    monkeypatch.setattr(
+        audit_agent, "run_tool", lambda *a, **k: audit_agent.ToolRun("ok", NPM_SAMPLE)
+    )
+    result = _static(tmp_path)
+    assert any("1 package.json sin auditar" in limit for limit in result["limits"])

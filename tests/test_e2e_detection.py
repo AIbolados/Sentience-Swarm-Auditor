@@ -114,3 +114,29 @@ async def test_panel_dismisses_a_benign_heuristic_finding_but_keeps_it_visible(t
     assert result["consolidated"][md5["id"]]["status"] == "dismissed"
     assert result["score"]["production_readiness"] == "READY"
     assert result["consolidated"][md5["id"]]["votes"], "el descarte debe quedar auditable"
+
+
+@pytest.mark.asyncio
+async def test_secret_inside_build_directory_is_found(tmp_path, monkeypatch):
+    (tmp_path / "build").mkdir()
+    (tmp_path / "build" / "config.js").write_text(f'const k = "{AWS_KEY}";\n')
+    router, _ = _router(monkeypatch)
+
+    result, _ = await graph.run_project_audit("built", str(tmp_path), router)
+
+    assert result["score"]["production_readiness"] == "BLOCKED"
+
+
+@pytest.mark.asyncio
+async def test_degraded_panel_does_not_mark_the_project_as_seen(tmp_path, monkeypatch):
+    (tmp_path / "cache.py").write_text(
+        "import hashlib\n\n\ndef k(u):\n    return hashlib.md5(u.encode()).hexdigest()\n"
+    )
+    for env in ("PA_KEY", "PB_KEY", "PC_KEY"):
+        monkeypatch.delenv(env, raising=False)
+    router = CredentialRouter(providers=PROVIDERS, client_factory=lambda k, u: None)
+
+    result, complete = await graph.run_project_audit("cache", str(tmp_path), router)
+
+    assert complete is False
+    assert result["panel"]["min_size"] == 0

@@ -27,8 +27,9 @@ IGNORE_DIRS = {
     ".git", ".npm", ".cache", ".local", ".nvm", "node_modules",
     ".gemini", ".cursor", ".vscode", "venv", ".venv", ".aider",
     "__pycache__", ".tox", ".mypy_cache", ".ruff_cache", ".pytest_cache",
-    "dist", "build", "target", "vendor", ".next", ".terraform",
 }
+# Nota: dist/build/vendor/target NO se ignoran: un secreto commiteado ahi debe
+# detectarse. Las herramientas ruidosas se acotan en su propio modulo.
 
 MAX_DEPTH = 8
 MAX_FILES = 5000
@@ -38,7 +39,7 @@ MAX_PARSE_FILES = 300
 CODE_EXTENSIONS: dict[str, str] = {
     ".py": "python",
     ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript",
-    ".ts": "typescript", ".tsx": "typescript",
+    ".ts": "typescript", ".tsx": "typescript", ".vue": "javascript", ".svelte": "javascript",
     ".go": "go", ".java": "java", ".kt": "kotlin", ".rs": "rust", ".rb": "ruby",
     ".php": "php", ".cs": "csharp", ".c": "c", ".cpp": "cpp", ".swift": "swift",
     ".sh": "shell", ".sql": "sql", ".tf": "terraform",

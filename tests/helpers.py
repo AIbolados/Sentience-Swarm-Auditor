@@ -34,6 +34,7 @@ def make_static_result(findings=None, ok=True, tools=None) -> dict:
         "tools": tools or {"secrets": "ok"},
         "ok": ok,
         "files_scanned": 1,
+        "limits": [],
     }
 
 

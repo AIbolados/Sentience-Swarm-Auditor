@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from change_detector import commit_hash, has_changed  # noqa: E402
 from discovery import IGNORE_DIRS, DiscoveryResult, classify_target  # noqa: E402
 from findings import Finding, assign_ids, make_finding  # noqa: E402
-from secrets_scan import attach_evidence, scan_secrets  # noqa: E402
+from secrets_scan import HARDCODED_SECRET_RULES, attach_evidence, scan_secrets  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +50,7 @@ class StaticResult(TypedDict):
     tools: dict[str, str]  # herramienta -> ok | skipped | unavailable | error | timeout
     ok: bool  # False si alguna herramienta aplicable no completo (no persistir el hash)
     files_scanned: int
+    limits: list[str]  # recortes del analisis que deben reportarse como limitacion
 
 
 def _resolve_binary(name: str) -> str | None:
@@ -182,12 +183,25 @@ def _worst(statuses: list[str]) -> str:
     return max(statuses, key=_STATUS_RANK.__getitem__) if statuses else "ok"
 
 
+def _dedupe_hardcoded_secrets(findings: list[Finding]) -> list[Finding]:
+    """bandit B105/B106/B107 y el escaneo de secretos reportan la misma linea:
+    se conserva el de secretos (ya redactado) para no contar doble."""
+    secret_lines = {(f["file"], f["line"]) for f in findings if f["source"] == "secrets"}
+    return [
+        f for f in findings
+        if not (f["source"] == "bandit" and f["rule"] in HARDCODED_SECRET_RULES
+                and (f["file"], f["line"]) in secret_lines)
+    ]
+
+
 def run_static_checks(path: str, discovery: DiscoveryResult) -> StaticResult:
     findings: list[Finding] = []
     tools: dict[str, str] = {}
+    limits: list[str] = []
 
     secret_scan = scan_secrets(path, discovery["files"])
     findings += secret_scan["findings"]
+    limits += secret_scan["limits"]
     tools["secrets"] = "ok"
 
     if discovery["is_python"]:
@@ -198,18 +212,25 @@ def run_static_checks(path: str, discovery: DiscoveryResult) -> StaticResult:
     if discovery["is_node"]:
         manifests = [m for m in discovery["manifests"] if os.path.basename(m) == "package.json"]
         statuses = []
+        if len(manifests) > MAX_NPM_MANIFESTS:
+            limits.append(
+                f"npm audit: {len(manifests) - MAX_NPM_MANIFESTS} package.json sin auditar "
+                f"(tope {MAX_NPM_MANIFESTS})"
+            )
         for manifest in manifests[:MAX_NPM_MANIFESTS]:
             npm_findings, status = _run_npm_audit(path, manifest)
             findings += npm_findings
             statuses.append(status)
         tools["npm_audit"] = _worst(statuses)
 
+    findings = _dedupe_hardcoded_secrets(findings)
     attach_evidence(path, findings)
     return StaticResult(
         findings=assign_ids(findings),
         tools=tools,
         ok=all(status in ("ok", "skipped") for status in tools.values()),
         files_scanned=secret_scan["files_scanned"],
+        limits=limits,
     )
 
 

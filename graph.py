@@ -88,14 +88,20 @@ async def run_project_audit(name: str, path: str, router: CredentialRouter) -> t
         "name": name,
         "path": path,
         "discovery": summarize_discovery(discovery),
-        "coverage": coverage_from_discovery(discovery, static["files_scanned"]),
+        "coverage": {
+            **coverage_from_discovery(discovery, static["files_scanned"]),
+            "limits": static.get("limits", []),
+        },
         "tools": static["tools"],
         "findings": findings,
         "panel": {key: value for key, value in panel.items() if key != "consolidated"},
         "consolidated": panel["consolidated"],
     }
     result["score"] = score_project(result)
-    return result, static["ok"]
+    # Con el panel degradado (sin cuota, < 2 revisores) los hallazgos quedan sin
+    # verificar: no se marca el proyecto como "visto" para reintentarlo luego.
+    panel_ok = panel["reviewed"] == 0 or panel["min_size"] >= 2
+    return result, static["ok"] and panel_ok
 
 
 async def audit_project_node(task: ProjectTask, router: CredentialRouter) -> dict:
