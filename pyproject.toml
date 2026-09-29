@@ -9,13 +9,15 @@ dependencies = [
     "langgraph>=1.2.12",
     "openai>=3.19.2",
     "mcp[cli]>=2.2.0",
+    "ruff>=0.6",
+    "bandit>=1.7",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=1.4.0",
-    "ruff>=0.6",
 ]
 
 [tool.ruff]
@@ -23,6 +25,10 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "E402"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]
+"scripts/*" = ["E501"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
