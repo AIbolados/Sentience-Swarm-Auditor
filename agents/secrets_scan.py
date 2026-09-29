@@ -32,11 +32,20 @@ MAX_FINDINGS_PER_FILE = 20
 BINARY_SNIFF_BYTES = 4096
 ENV_TEMPLATE_SUFFIXES = (".example", ".sample", ".template", ".dist")
 
+# Solo valores CLARAMENTE ficticios. Un prefijo como "my" o "test" NO basta:
+# "mysecretpass" o "testing-Prod-9f8e" pueden ser credenciales reales.
 PLACEHOLDER_RE = re.compile(
-    r"^(?:<[^>]*>|\$\{[^}]*\}|\{\{[^}]*\}\}|x{4,}|\*{4,}|password|secret|token"
-    r"|(?:your|my|example|sample|dummy|test|fake|changeme|change_me|replace|todo|placeholder)[\w-]*)$",
+    r"^(?:<[^>]*>|\$\{[^}]*\}|\{\{[^}]*\}\}|x{4,}|\*{4,}"
+    r"|password|secret|token|example|dummy|placeholder|redacted|todo|replace[_-]?me"
+    r"|(?:changeme|change_me)[\w-]*"
+    r"|(?:your|my)[_-](?:[\w-]*[_-])?(?:password|secret|token|api[_-]?key|key)(?:[_-]here)?)$",
     re.IGNORECASE,
 )
+HARDCODED_SECRET_RULES = {"B105", "B106", "B107"}  # bandit: el mensaje trae el valor literal
+_STRING_LITERAL = re.compile(r"""(["'])(?:(?!\1).)*\1""")
+_KEY_BEGIN = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----")
+_LINE_PREFIX = re.compile(r"^(\d+: )?")
+_BASE64_LINE = re.compile(r"^[A-Za-z0-9+/=]{60,}$")
 
 
 class _Pattern(NamedTuple):
@@ -60,7 +69,7 @@ class _Hit(NamedTuple):
 # solapados se descartan (gana el primero).
 PATTERNS: tuple[_Pattern, ...] = (
     _Pattern("private-key", re.compile(
-        r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY(?: BLOCK)?-----"),
+        r"-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----"),
         "critical", "deterministic", 0, 0.0),
     _Pattern("anthropic-api-key", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}"),
              "critical", "deterministic", 0, 0.0),
@@ -125,7 +134,6 @@ def _classify_jwt(token: str) -> tuple[str, str, str] | None:
 
 
 def _find_hits(line: str) -> list[_Hit]:
-    line = line[:MAX_LINE_CHARS]
     taken: list[tuple[int, int]] = []
     hits: list[_Hit] = []
     for pattern in PATTERNS:
@@ -151,15 +159,33 @@ def _find_hits(line: str) -> list[_Hit]:
     return sorted(hits)
 
 
+def mask_literals(text: str) -> str:
+    """Enmascara todo literal de cadena (para reglas cuyo mensaje trae el valor)."""
+    return _STRING_LITERAL.sub('"[REDACTED:literal]"', text)
+
+
 def redact(text: str) -> str:
-    """Reemplaza cada secreto detectado por [REDACTED:<regla>]."""
+    """Reemplaza cada secreto detectado por [REDACTED:<regla>]. Consciente de
+    bloques: tras una cabecera de clave privada se enmascara todo el cuerpo
+    hasta -----END, y una linea que es solo base64 largo se enmascara siempre
+    (cubre contextos que empiezan a mitad del cuerpo de una clave)."""
     out = []
+    in_key = False
     for line in text.split("\n"):
-        if len(line) > MAX_LINE_CHARS:
-            line = line[:MAX_LINE_CHARS] + "...[truncado]"
-        for hit in reversed(_find_hits(line)):
-            line = f"{line[:hit.start]}[REDACTED:{hit.rule}]{line[hit.end:]}"
-        out.append(line)
+        prefix = _LINE_PREFIX.match(line).group(1) or ""
+        body = line[len(prefix):]
+        if in_key:
+            out.append(f"{prefix}[REDACTED:private-key]")
+            in_key = "-----END" not in body
+            continue
+        for hit in reversed(_find_hits(body)):
+            body = f"{body[:hit.start]}[REDACTED:{hit.rule}]{body[hit.end:]}"
+        if _BASE64_LINE.match(body.strip()):
+            body = "[REDACTED:base64-blob]"
+        if len(body) > MAX_LINE_CHARS:
+            body = body[:MAX_LINE_CHARS] + "...[truncado]"
+        in_key = bool(_KEY_BEGIN.search(line)) and "-----END" not in line
+        out.append(prefix + body)
     return "\n".join(out)
 
 
@@ -183,31 +209,35 @@ def _is_tracked(root: str, rel: str) -> bool:
     return proc.returncode == 0
 
 
-def _read_text(path: str) -> str | None:
+def _read_text(path: str) -> tuple[str | None, str]:
+    """(texto, motivo). motivo: ok | oversize | binary | unreadable."""
     try:
         if os.path.getsize(path) > MAX_FILE_BYTES:
-            return None
+            return None, "oversize"
         with open(path, "rb") as handle:
             head = handle.read(BINARY_SNIFF_BYTES)
             if b"\0" in head:
-                return None
+                return None, "binary"
             data = head + handle.read()
     except OSError as e:
         logger.debug("No se pudo leer %s: %s", path, e)
-        return None
-    return data.decode("utf-8", errors="replace")
+        return None, "unreadable"
+    return data.decode("utf-8", errors="replace"), "ok"
 
 
 class SecretScan(TypedDict):
     findings: list[Finding]
     files_scanned: int
     files_skipped: int
+    limits: list[str]  # recortes que el escaneo NO puede callar (van a coverage)
 
 
 def scan_secrets(root: str, files: list[str]) -> SecretScan:
     findings: list[Finding] = []
     scanned = 0
     skipped = 0
+    oversized: list[str] = []
+    capped: list[str] = []
     for rel in files:
         name = os.path.basename(rel)
         if is_env_file(name):
@@ -220,24 +250,46 @@ def scan_secrets(root: str, files: list[str]) -> SecretScan:
                     evidence="(contenido no leido por diseno)",
                 ))
             continue
-        text = _read_text(os.path.join(root, rel))
+        text, reason = _read_text(os.path.join(root, rel))
         if text is None:
             skipped += 1
+            if reason == "oversize":
+                oversized.append(rel)
             continue
         scanned += 1
-        per_file = 0
+        heuristic_seen = 0
+        capped_here = False
         for lineno, line in enumerate(text.split("\n"), start=1):
             for hit in _find_hits(line):
+                if hit.tier == "heuristic":
+                    # El tope solo frena ruido heuristico: un secreto determinista
+                    # (p. ej. una AKIA...) nunca se pierde por venir despues.
+                    if heuristic_seen >= MAX_FINDINGS_PER_FILE:
+                        capped_here = True
+                        continue
+                    heuristic_seen += 1
                 findings.append(make_finding(
                     source="secrets", rule=hit.rule, severity=hit.severity,
                     tier=hit.tier, file=rel, line=lineno,
                     message=f"Posible secreto expuesto ({hit.rule})",
                 ))
-                per_file += 1
-            if per_file >= MAX_FINDINGS_PER_FILE:
-                logger.warning("%s: tope de %d hallazgos de secretos", rel, MAX_FINDINGS_PER_FILE)
-                break
-    return SecretScan(findings=findings, files_scanned=scanned, files_skipped=skipped)
+        if capped_here:
+            capped.append(rel)
+
+    limits: list[str] = []
+    if oversized:
+        limits.append(
+            f"Escaneo de secretos omitio {len(oversized)} archivo(s) de texto mayores a "
+            f"{MAX_FILE_BYTES // 1000} KB: {', '.join(oversized[:3])}"
+        )
+    if capped:
+        limits.append(
+            f"Escaneo de secretos: tope de {MAX_FINDINGS_PER_FILE} hallazgos heuristicos "
+            f"por archivo alcanzado en {', '.join(capped[:3])}"
+        )
+    return SecretScan(
+        findings=findings, files_scanned=scanned, files_skipped=skipped, limits=limits,
+    )
 
 
 def read_context(
@@ -258,7 +310,7 @@ def read_context(
     except (OSError, ValueError):
         return ""
     numbered = "\n".join(
-        f"{number}: {text.rstrip()[:MAX_LINE_CHARS]}"
+        f"{number}: {text.rstrip()}"
         for number, text in enumerate(lines, start=first)
     )
     return redact(numbered)[:max_chars]
@@ -267,9 +319,16 @@ def read_context(
 def attach_evidence(root: str, findings: list[Finding]) -> None:
     """Completa evidence (redactada) y redacta message en cada hallazgo."""
     for finding in findings:
+        masks_literals = finding["rule"] in HARDCODED_SECRET_RULES
         finding["message"] = redact(finding["message"])
+        if masks_literals:
+            finding["message"] = mask_literals(finding["message"])
         if finding["evidence"]:
             continue
-        finding["evidence"] = (
-            read_context(root, finding["file"], finding["line"]) or finding["message"][:300]
+        # Sin lineas vecinas para secretos: el contexto puede contener mas secreto.
+        radius = 0 if finding["source"] == "secrets" or masks_literals else 2
+        evidence = (
+            read_context(root, finding["file"], finding["line"], radius=radius)
+            or finding["message"][:300]
         )
+        finding["evidence"] = mask_literals(evidence) if masks_literals else evidence

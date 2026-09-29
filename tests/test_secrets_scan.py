@@ -127,3 +127,52 @@ def test_read_context_blocks_path_escape(tmp_path):
 def test_read_context_never_reads_env_files(tmp_path):
     (tmp_path / ".env").write_text("A=1\nB=2\n")
     assert read_context(str(tmp_path), ".env", 1) == ""
+
+
+def test_real_credentials_with_common_prefixes_are_not_placeholders(tmp_path):
+    content = (
+        'DB = "postgres://admin:mysecretpass@db.prod:5432/app"\n'
+        'password = "testing-Prod-9f8e7d6c"\n'
+    )
+    rules = [f["rule"] for f in _scan(tmp_path, "cfg.py", content)["findings"]]
+    assert "db-connection-string" in rules
+    assert "generic-secret-assignment" in rules
+
+
+def test_private_key_body_is_never_in_evidence(tmp_path):
+    body = "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW"
+    (tmp_path / "deploy.key").write_text(
+        f"-----BEGIN OPENSSH PRIVATE KEY-----\n{body}\n{body}\n-----END OPENSSH PRIVATE KEY-----\n"
+    )
+    context = read_context(str(tmp_path), "deploy.key", 1)
+    assert body not in context
+    assert "[REDACTED:private-key]" in context
+
+
+def test_redact_masks_base64_lines_even_without_the_header():
+    blob = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj"
+    assert blob not in redact(f"12: {blob}")
+
+
+def test_secret_after_column_5000_is_detected(tmp_path):
+    line = "x" * 6000 + f' "{AWS_KEY}"'
+    [finding] = _scan(tmp_path, "bundle.js", line + "\n")["findings"]
+    assert finding["rule"] == "aws-access-key-id"
+
+
+def test_deterministic_secret_survives_the_heuristic_cap_and_cap_is_reported(tmp_path, monkeypatch):
+    monkeypatch.setattr(secrets_scan, "MAX_FINDINGS_PER_FILE", 2)
+    generic = "".join(f'api_key{i} = "xK9fT2qLm8ZpR4v{i}Bq"\n' for i in range(5))
+    result = _scan(tmp_path, "cfg.py", generic + f'KEY = "{AWS_KEY}"\n')
+
+    rules = [f["rule"] for f in result["findings"]]
+    assert "aws-access-key-id" in rules
+    assert rules.count("generic-secret-assignment") == 2
+    assert any("tope de 2" in limit for limit in result["limits"])
+
+
+def test_oversized_text_file_is_reported_as_a_limit(tmp_path, monkeypatch):
+    monkeypatch.setattr(secrets_scan, "MAX_FILE_BYTES", 10)
+    (tmp_path / "big.txt").write_text("a" * 100)
+    result = scan_secrets(str(tmp_path), ["big.txt"])
+    assert any("big.txt" in limit for limit in result["limits"])
