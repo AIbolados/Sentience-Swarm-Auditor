@@ -3,7 +3,7 @@ configurados en el entorno (.env). Uso manual:
 
     uv run python scripts/eval_panel.py
 
-Criterios de aceptacion (exit code 1 si no se cumplen):
+Exit 2 = medicion invalida (menos de 2 revisores). Criterios (exit 1 si no se cumplen):
   - 0 hallazgos REALES descartados (`dismissed`).           -> sin falsos negativos
   - <= 20 % de los FALSOS POSITIVOS quedan `confirmed`.     -> el panel filtra ruido
 No imprime claves ni contenido de .env.
@@ -57,6 +57,13 @@ def main() -> int:
                 stats["wrong"] += 1
     for provider, stats in sorted(per_provider.items()):
         print(f"  {provider:12s} correctos={stats['correct']} errados={stats['wrong']} abstenciones={stats['abstain']}")
+
+    if result["min_size"] < 2:
+        print("INVALIDO: el panel tuvo menos de 2 revisores; no hay medicion. "
+              "Configure al menos 2 claves de proveedores distintos en .env.")
+        return 2
+    if not result["diverse"]:
+        print("AVISO: diversidad de modelos NO verificada (fije <NOMBRE>_MODEL y <NOMBRE>_FAMILY).")
 
     real_dismissed = [i for i, t in truth.items() if t == "real" and consolidated[i]["status"] == "dismissed"]
     fp_ids = [i for i, t in truth.items() if t == "false_positive"]
