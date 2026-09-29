@@ -25,10 +25,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "agents"))
 from active_scan_guard import ScanAuthorization, TargetEnvironment  # noqa: E402
 from audit_agent import IGNORE_DIRS, PROJECTS_HOME, run_static_checks  # noqa: E402
 from change_detector import commit_hash, has_changed  # noqa: E402
+from discovery import classify_target, coverage_from_discovery, summarize_discovery  # noqa: E402
 from dast_nuclei import NucleiNotAvailableError, NucleiScanError, run_nuclei_scan  # noqa: E402
 from github_source import CloneError, clone_repo_shallow  # noqa: E402
 from github_watcher import watch_intelligence  # noqa: E402
 from llm_router import CredentialRouter, NoProviderAvailableError  # noqa: E402
+from panel import run_panel  # noqa: E402
+from report import render_project_section  # noqa: E402
 from scoring import score_active_scan, score_project  # noqa: E402
 
 NUCLEI_TEMPLATES_DIR = os.environ.get("NUCLEI_TEMPLATES_DIR")
@@ -46,44 +49,6 @@ class SwarmState(TypedDict):
     project_results: Annotated[list[dict], operator.add]
     github_intel: dict | None
     report_path: str | None
-
-
-def build_scan_messages(project_name: str, static_findings: dict) -> list[dict]:
-    findings_summary = json.dumps(static_findings, indent=2, default=str)[:4000]
-    return [
-        {
-            "role": "system",
-            "content": (
-                "Eres un agente de auditoria de codigo generado por IA (vibe-coding). "
-                "Se te dan hallazgos de herramientas estaticas (ruff/bandit/npm audit). "
-                "Responde en espanol, breve y accionable:\n"
-                "1) Confirma o descarta cada hallazgo segun la evidencia dada.\n"
-                "2) Senala si algun hallazgo sugiere secretos/credenciales expuestas.\n"
-                "3) Senala sobreingenieria evidente si la hay.\n"
-                "No inventes hallazgos que la evidencia no respalde."
-            ),
-        },
-        {
-            "role": "user",
-            "content": f"Proyecto: {project_name}\nHallazgos estaticos (JSON):\n{findings_summary}",
-        },
-    ]
-
-
-def build_debate_messages(scan_output: str) -> list[dict]:
-    return [
-        {
-            "role": "system",
-            "content": (
-                "Eres un segundo auditor, independiente del primero. Tu trabajo es "
-                "VALIDAR o REFUTAR el analisis anterior, no repetirlo. Se especificamente "
-                "esceptico: di explicitamente si algun hallazgo es un falso positivo "
-                "('falso positivo', 'no es un riesgo') o si confirmas que es real "
-                "('confirmo', 'riesgo real'). Responde en espanol, breve."
-            ),
-        },
-        {"role": "user", "content": f"Analisis a validar:\n{scan_output}"},
-    ]
 
 
 def discover_projects(state: SwarmState):
@@ -109,30 +74,34 @@ def discover_projects(state: SwarmState):
 
 
 async def run_project_audit(name: str, path: str, router: CredentialRouter) -> tuple[dict, bool]:
-    """Nucleo reusable: escaneo estatico + ensemble scan/debate para UN
-    proyecto. Devuelve (result, static_ok). Usado tanto por el grafo batch
-    (audit_project_node) como por el MCP server para auditar bajo demanda."""
-    static_findings, static_ok = await asyncio.to_thread(run_static_checks, path)
+    """Nucleo reusable: discovery -> analisis estatico -> panel de verificacion
+    para UN proyecto. Devuelve (result, static_ok). Usado tanto por el grafo
+    batch (audit_project_node) como por el MCP server y audit_github_repo.
 
-    scan_messages = build_scan_messages(name, static_findings)
-
-    def debate_builder(_scan_provider: str, scan_output: str) -> list[dict]:
-        return build_debate_messages(scan_output)
-
-    try:
-        ensemble = await asyncio.to_thread(router.chat_ensemble, scan_messages, debate_builder)
-    except NoProviderAvailableError as e:
-        logger.error("Sin proveedor LLM disponible para %s: %s", name, e)
-        ensemble = {"error": str(e)}
+    Sin hallazgos de severidad media o mayor NO se llama a ningun LLM."""
+    discovery = await asyncio.to_thread(classify_target, path)
+    static = await asyncio.to_thread(run_static_checks, path, discovery)
+    findings = static["findings"]
+    panel = await asyncio.to_thread(run_panel, router, findings, name)
 
     result = {
         "name": name,
         "path": path,
-        "static": static_findings,
-        "ensemble": ensemble,
+        "discovery": summarize_discovery(discovery),
+        "coverage": {
+            **coverage_from_discovery(discovery, static["files_scanned"]),
+            "limits": static.get("limits", []),
+        },
+        "tools": static["tools"],
+        "findings": findings,
+        "panel": {key: value for key, value in panel.items() if key != "consolidated"},
+        "consolidated": panel["consolidated"],
     }
     result["score"] = score_project(result)
-    return result, static_ok
+    # Con el panel degradado (sin cuota, < 2 revisores) los hallazgos quedan sin
+    # verificar: no se marca el proyecto como "visto" para reintentarlo luego.
+    panel_ok = panel["reviewed"] == 0 or panel["min_size"] >= 2
+    return result, static["ok"] and panel_ok
 
 
 async def audit_project_node(task: ProjectTask, router: CredentialRouter) -> dict:
@@ -329,30 +298,14 @@ def generate_report_node(state: SwarmState, log_dir: Path) -> dict:
             f.write("Sin amenazas globales relevantes detectadas.\n")
         f.write("\n")
 
-        f.write("## Estado de Proyectos (ensemble multi-modelo)\n")
+        f.write("## Estado de Proyectos (panel multi-modelo)\n")
         if not projects:
             f.write("Sin cambios detectados en esta corrida.\n")
         for project in projects:
-            score = project.get("score", {})
-            ensemble = project.get("ensemble", {})
-            readiness = score.get("production_readiness", "NOT_ASSESSED")
-            f.write(f"\n### {project['name']}\n")
-            f.write(f"- Production readiness: **{readiness}**\n")
-            f.write(f"- Engineering health: {score.get('engineering_health', '?')}/100\n")
-            f.write(f"- Vibe slop risk: {score.get('vibe_slop_risk', '?')}/100\n")
-            f.write(f"- Evidence confidence: {score.get('evidence_confidence', '?')}/100\n")
-            if ensemble.get("error"):
-                f.write(f"- Ensemble: error ({ensemble['error']})\n")
-            else:
-                scan_provider = ensemble.get("scan_provider")
-                debate_provider = ensemble.get("debate_provider")
-                scan_output = ensemble.get("scan_output", "")[:500]
-                debate_output = ensemble.get("debate_output", "")[:500]
-                f.write(f"- Scan ({scan_provider}): {scan_output}\n")
-                f.write(f"- Debate ({debate_provider}): {debate_output}\n")
+            f.write(render_project_section(project))
 
         f.write("\n\n*Reporte generado por audit-mcp")
-        f.write(" (LangGraph + ensemble multi-modelo).*")
+        f.write(" (LangGraph + panel multi-modelo).*")
 
     logger.info("Reporte generado en %s", report_path)
     return {"report_path": str(report_path)}

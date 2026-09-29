@@ -6,10 +6,13 @@
 > retome el trabajo localmente. Este es el motor mas avanzado (swarm real
 > + ensemble multi-modelo), pensado como base de esa fusion.
 
-Sistema de auditoría multi-agente. Orquesta con LangGraph un ensemble
-multi-modelo (scan + debate, dos proveedores LLM independientes) para
-auditar proyectos completos en paralelo, además del escaneo estático
-tradicional (Ruff, Bandit, npm audit). Corre por cron/batch **o** bajo
+Sistema de auditoría multi-agente. Orquesta con LangGraph un flujo
+discovery → análisis estático (secretos, Ruff, Bandit, npm audit) → panel de
+verificación multi-modelo (hasta 3 familias de modelo, votación ciega) →
+scoring determinista, para auditar proyectos completos en paralelo. Ver
+`docs/superpowers/plans/` para el diseño y `scripts/eval_panel.py` para medir
+el panel con proveedores reales (requiere claves; opcionales `<NOMBRE>_MODEL`,
+`<NOMBRE>_FAMILY` y `AUDIT_SEND_CODE=0` para no enviar código a los LLM). Corre por cron/batch **o** bajo
 demanda como servidor MCP conectado a Claude Code.
 
 ## 🚀 Características
@@ -56,7 +59,8 @@ demanda como servidor MCP conectado a Claude Code.
    apuntando a `uv run python mcp_server.py` en este directorio.
 
 ## 📂 Estructura
-- `/agents`: lógica de los agentes (`audit_agent.py`, `github_watcher.py`,
+- `/agents`: lógica de los agentes (`discovery.py`, `secrets_scan.py`, `panel.py`,
+  `verdicts.py`, `findings.py`, `report.py`, `audit_agent.py`, `github_watcher.py`,
   `change_detector.py`, `llm_router.py`, `scoring.py`, `github_source.py`,
   `active_scan_guard.py`, `dast_nuclei.py`).
 - `graph.py`: grafo LangGraph (discovery, audit_project, audit_github_repo,

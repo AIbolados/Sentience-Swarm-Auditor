@@ -64,7 +64,7 @@ Esto es necesario porque **no se sabe aún qué stack de automatización usa cad
 > migración a TS — esto reemplaza esa idea.
 
 - **Runtime:** Python 3.10+.
-- **Orquestación:** LangGraph (`graph.py`) — fan-out concurrente por proyecto (`Send()`), nunca secuencial. Ensemble scan/debate: dos proveedores LLM distintos por hallazgo, uno nunca revisa su propio análisis.
+- **Orquestación:** LangGraph (`graph.py`) — fan-out concurrente por proyecto (`Send()`), nunca secuencial. Panel de verificación: hasta 3 revisores de familias de modelo distintas por lote, votación ciega con JSON estricto y citas verificables; el descarte exige consenso sin disidencia y los hallazgos deterministas de severidad ≥ high nunca se descartan por LLM. Sin hallazgos ≥ medium no hay llamadas LLM (uno nunca revisa su propio análisis). Discovery: `agents/discovery.py` (recorrido único, multi-lenguaje, cobertura explícita) + `agents/secrets_scan.py`. El DAST conserva `chat_ensemble`.
 - **MCP SDK:** `mcp[cli]` (oficial, paquete `mcp` de PyPI) — `mcp.server.mcpserver.MCPServer`.
 - **Modo de transporte:** local/stdio, conectado directo a Claude Code (`mcp_server.py`). Tools expuestas: `audit_project`, `audit_github_repo`, `active_security_scan`, `audit_all_projects`, `get_last_report`. Sin plan de deploy remoto (HTTP/SSE) por ahora — si surge la necesidad, se evalúa en su momento.
 - **Rotación de credenciales LLM:** `agents/llm_router.py`, round-robin sobre 7 proveedores OpenAI-compatible (NaraRouter, TokenRouter, OpenRouter, Mistral, Gemini, Groq, HuggingFace) con cooldown en 429.
@@ -84,9 +84,10 @@ Esto es necesario porque **no se sabe aún qué stack de automatización usa cad
 5. ✅ Motor DAST activo con guardrail (`active_security_scan`)
 
 **Pendiente:**
-6. ⬜ Motor de discovery: clasificar el input recibido (código fuente vs. export de workflow n8n/Zapier/Make vs. mixto) antes de rutear al motor correspondiente
+6. ✅ Motor de discovery (sin short-circuit: las automatizaciones se siguen escaneando por secretos; su contenido queda como limitación hasta el motor de procesos, punto 7)
 7. ⬜ Motor de auditoría de **procesos** (conformance checking, inspirado en `pm4py`) — hoy solo existe el motor de código, no el de procesos de negocio automatizados
 8. ⬜ Persistencia en Supabase (schema `audit`)
+   - ⬜ Analizador de código JS/TS (hoy solo `npm audit`); ⬜ migrar DAST al panel; ⬜ reglas Supabase RLS / CI-CD
 9. ⬜ Alinear nombres de tools MCP expuestas con el vocabulario del roadmap original si aplica (`discover_target`, `audit_process`, `get_audit_report`) — hoy los nombres son los de la sección 4 (`audit_project`, etc.)
 
 ## 6. Definición de éxito

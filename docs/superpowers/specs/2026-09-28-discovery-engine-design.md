@@ -1,7 +1,7 @@
 # Motor de discovery — diseño
 
 **Fecha:** 2026-09-28
-**Estado:** aprobado en conversación, pendiente de plan de implementación
+**Estado:** SUPERADO por `docs/superpowers/plans/2026-09-29-discovery-efectivo-y-panel-anti-falsos-positivos.md` (sin short-circuit, multi-lenguaje, recorrido recursivo)
 **Roadmap:** punto 6 de `CLAUDE.md` sección 5
 
 ## Contexto y problema

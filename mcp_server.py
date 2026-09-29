@@ -1,8 +1,8 @@
 """Servidor MCP local (stdio) para audit-mcp.
 
-Expone el mismo grafo LangGraph (escaneo estatico + ensemble scan/debate
-multi-modelo) como tools invocables bajo demanda desde Claude Code, sin
-reemplazar el modo cron/batch existente (conductor.py sigue funcionando
+Expone el mismo grafo LangGraph (discovery + escaneo estatico + panel de
+verificacion multi-modelo) como tools invocables bajo demanda desde Claude
+Code, sin reemplazar el modo cron/batch existente (conductor.py sigue funcionando
 igual para corridas programadas).
 
 Las funciones se definen sueltas (no como metodos decorados) para poder
@@ -35,9 +35,11 @@ _router = CredentialRouter()
 
 async def audit_project(path: str) -> dict:
     """Audita un proyecto puntual: escaneo estatico (ruff/bandit/npm audit)
-    mas un ensemble de 2 modelos LLM independientes (scan_agent identifica
-    hallazgos, debate_agent de OTRO proveedor los confirma o refuta). No
-    ejecuta nada contra un sistema en produccion: solo lee codigo fuente.
+    mas un panel de hasta 3 modelos LLM de familias distintas que verifican
+    cada hallazgo (votacion ciega, citas verificables; un falso positivo solo
+    se descarta con consenso y queda registrado). Sin hallazgos de severidad
+    media o mayor no se llama a ningun LLM. No ejecuta nada contra un
+    sistema en produccion: solo lee codigo fuente.
 
     path debe ser una ruta absoluta a un directorio de codigo al que
     tengas acceso de lectura autorizado (propio o de un tercero que te
@@ -50,7 +52,7 @@ async def audit_project(path: str) -> dict:
 
 async def audit_github_repo(owner_repo: str, ref: str = "HEAD") -> dict:
     """Clona (shallow, solo lectura) un repo de GitHub y lo audita con el
-    mismo pipeline (escaneo estatico + ensemble scan/debate). Nunca
+    mismo pipeline (discovery + escaneo estatico + panel de verificacion). Nunca
     ejecuta codigo del repo, solo lo analiza; el clon se borra siempre al
     terminar.
 

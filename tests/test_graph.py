@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "agents"))
 
 import graph  # noqa: E402
+from helpers import make_static_result, sample_finding, verdict_client  # noqa: E402
 from llm_router import CredentialRouter, Provider  # noqa: E402
 
 FAKE_PROVIDERS = [
@@ -42,7 +43,7 @@ def isolated_swarm(tmp_path, monkeypatch):
     monkeypatch.setattr(change_detector, "SWARM_HOME", swarm_home)
     monkeypatch.setattr(change_detector, "STATE_FILE", swarm_home / "state.json")
 
-    monkeypatch.setattr(graph, "run_static_checks", lambda path: ({}, True))
+    monkeypatch.setattr(graph, "run_static_checks", lambda path, discovery: make_static_result([sample_finding()]))
     monkeypatch.setattr(graph, "watch_intelligence", lambda: {"findings": []})
 
     monkeypatch.setenv("PROV_A_KEY", "key-a")
@@ -53,7 +54,7 @@ def isolated_swarm(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_graph_audits_all_projects_concurrently(isolated_swarm):
-    client = _fake_llm_client("todo ok")
+    client = verdict_client("real")
     router = CredentialRouter(providers=FAKE_PROVIDERS, client_factory=lambda k, u: client)
 
     compiled = graph.build_graph(router=router, log_dir=isolated_swarm["log_dir"])
@@ -64,7 +65,8 @@ async def test_graph_audits_all_projects_concurrently(isolated_swarm):
     audited_names = {p["name"] for p in final_state["project_results"]}
     assert audited_names == {"proj_a", "proj_b"}
     for project in final_state["project_results"]:
-        assert project["ensemble"]["scan_provider"] != project["ensemble"]["debate_provider"]
+        assert project["panel"]["min_size"] == 2
+        assert project["consolidated"]["F001"]["status"] == "confirmed"
         assert "score" in project
 
     report_path = Path(final_state["report_path"])
