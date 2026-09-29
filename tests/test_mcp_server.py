@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "agents"))
 
 import graph  # noqa: E402
 import mcp_server  # noqa: E402
+from helpers import make_static_result, sample_finding, verdict_client  # noqa: E402
 from llm_router import CredentialRouter, Provider  # noqa: E402
 
 FAKE_PROVIDERS = [
@@ -45,16 +46,16 @@ async def test_audit_project_tool_audits_real_directory(tmp_path, monkeypatch):
 
     monkeypatch.setenv("PROV_A_KEY", "key-a")
     monkeypatch.setenv("PROV_B_KEY", "key-b")
-    monkeypatch.setattr(graph, "run_static_checks", lambda path: ({}, True))
+    monkeypatch.setattr(graph, "run_static_checks", lambda path, discovery: make_static_result([sample_finding()]))
 
-    client = _fake_llm_client("sin hallazgos")
+    client = verdict_client("real")
     fake_router = CredentialRouter(providers=FAKE_PROVIDERS, client_factory=lambda k, u: client)
     monkeypatch.setattr(mcp_server, "_router", fake_router)
 
     result = await mcp_server.audit_project(str(project))
 
     assert result["name"] == "target"
-    assert result["ensemble"]["scan_provider"] != result["ensemble"]["debate_provider"]
+    assert result["panel"]["min_size"] == 2
     assert "score" in result
 
 
